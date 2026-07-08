@@ -13,7 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const CONFIG_DIR = path.join(os.homedir(), '.rcmd');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-const RELAY_SERVER = process.env.RCMD_RELAY || 'https://your-app.onrender.com';
+const RELAY_SERVER = process.env.RCMD_RELAY || 'https://rcmd-relay.onrender.com';
 
 // Ensure config directory exists
 if (!fs.existsSync(CONFIG_DIR)) {
