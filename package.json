@@ -1,5 +1,5 @@
 {
-  "name": "@dev-aemni/rcmd",
+  "name": "rcmd-cli",
   "version": "2.0.0",
   "description": "Remote terminal access with relay server - secure, feature-rich, global access",
   "main": "cli.js",
