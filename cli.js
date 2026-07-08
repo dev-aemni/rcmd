@@ -2,49 +2,82 @@
 
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
-const https = require('https');
-const { execSync, spawn } = require('child_process');
-const crypto = require('crypto');
 const os = require('os');
+const crypto = require('crypto');
 const readline = require('readline');
+const { execSync } = require('child_process');
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
 
-const CONFIG_DIR = path.join(os.homedir(), '.rcmd');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+// Colors for console output
+const colors = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  underscore: '\x1b[4m',
+  blink: '\x1b[5m',
+  reverse: '\x1b[7m',
+  hidden: '\x1b[8m',
+  
+  black: '\x1b[30m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  
+  bgBlack: '\x1b[40m',
+  bgRed: '\x1b[41m',
+  bgGreen: '\x1b[42m',
+  bgYellow: '\x1b[43m',
+  bgBlue: '\x1b[44m',
+  bgMagenta: '\x1b[45m',
+  bgCyan: '\x1b[46m',
+  bgWhite: '\x1b[47m'
+};
+
+// Helper functions for colored output
+const log = {
+  success: (msg) => console.log(`${colors.green}✓${colors.reset} ${msg}`),
+  error: (msg) => console.log(`${colors.red}✗${colors.reset} ${msg}`),
+  info: (msg) => console.log(`${colors.cyan}ℹ${colors.reset} ${msg}`),
+  warn: (msg) => console.log(`${colors.yellow}⚠${colors.reset} ${msg}`),
+  title: (msg) => console.log(`${colors.bright}${colors.cyan}${msg}${colors.reset}`),
+  header: (msg) => console.log(`\n${colors.bgCyan}${colors.black}${colors.bright} ${msg} ${colors.reset}\n`),
+  section: (msg) => console.log(`\n${colors.bright}${colors.magenta}${msg}${colors.reset}`),
+  command: (msg) => console.log(`  ${colors.bright}${colors.green}>${colors.reset} ${colors.white}${msg}${colors.reset}`),
+  dim: (msg) => console.log(`${colors.dim}${msg}${colors.reset}`),
+  highlight: (msg) => `${colors.bright}${colors.yellow}${msg}${colors.reset}`,
+  value: (msg) => `${colors.bright}${colors.white}${msg}${colors.reset}`,
+};
+
 const RELAY_SERVER = process.env.RCMD_RELAY || 'https://rcmd-relay.onrender.com';
-
-// Ensure config directory exists
-if (!fs.existsSync(CONFIG_DIR)) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-}
 
 // Command handler
 const command = process.argv[2];
 const args = process.argv.slice(3);
 
 if (command === 'host' || command === 'h') {
-  // Start hosting mode
   const password = args[0];
-  const port = args[1] || '5555';
   
   if (!password) {
-    console.error('✗ Password required for hosting');
-    console.log('Usage: rcmd host <password> [port]');
+    console.log(`\n${colors.bgRed}${colors.white} ERROR ${colors.reset} Password required for hosting\n`);
+    log.info('Usage: rcmd host <password>');
+    console.log(`  ${colors.dim}Example: rcmd host mysecretpass${colors.reset}\n`);
     process.exit(1);
   }
   
-  startHosting(password, port);
+  startHosting(password);
 } 
 else if (command === 'connect' || command === 'c') {
-  // Connect to a host
   const sessionId = args[0];
   const password = args[1];
   
   if (!sessionId || !password) {
-    console.error('✗ Session ID and password required');
-    console.log('Usage: rcmd connect <session-id> <password>');
+    console.log(`\n${colors.bgRed}${colors.white} ERROR ${colors.reset} Session ID and password required\n`);
+    log.info('Usage: rcmd connect <session-id> <password>');
+    console.log(`  ${colors.dim}Example: rcmd connect abc123 mysecretpass${colors.reset}\n`);
     process.exit(1);
   }
   
@@ -54,27 +87,42 @@ else {
   displayHelp();
 }
 
-// Display help
 function displayHelp() {
   console.log(`
-╔══════════════════════════════════════════════╗
-║      RCMD - Remote Terminal Access v1.0      ║
-╚══════════════════════════════════════════════╝
+${colors.bgCyan}${colors.black}${colors.bright}                                                    ${colors.reset}
+${colors.bgCyan}${colors.black}${colors.bright}      RCMD - Remote Terminal Access v2.0           ${colors.reset}
+${colors.bgCyan}${colors.black}${colors.bright}                                                    ${colors.reset}
 
-Commands:
-  rcmd host <password> [port]        Start hosting your terminal
-  rcmd connect <session-id> <password>  Connect to a remote terminal
+${colors.bright}${colors.cyan}Commands:${colors.reset}
+  ${colors.green}rcmd host${colors.reset} ${colors.yellow}<password>${colors.reset}        Start hosting your terminal
+  ${colors.green}rcmd connect${colors.reset} ${colors.yellow}<session-id> <password>${colors.reset}  Connect to a remote terminal
 
-Examples:
-  rcmd host mysecretpass
-  rcmd connect abc123 mysecretpass
+${colors.bright}${colors.cyan}Examples:${colors.reset}
+  ${colors.dim}>${colors.reset} rcmd host mysecretpass
+  ${colors.dim}>${colors.reset} rcmd connect abc123 mysecretpass
 
-Relay Server: ${RELAY_SERVER}
+${colors.bright}${colors.cyan}Relay Server:${colors.reset} ${colors.dim}${RELAY_SERVER}${colors.reset}
+  ${colors.dim}Change with: set RCMD_RELAY=https://your-server.com${colors.reset}
 `);
   process.exit(0);
 }
 
-// Get detailed system metadata (Windows compatible)
+// Generate consistent IDs from password
+function generateSessionId(password) {
+  return crypto.createHash('sha256')
+    .update('rcmd-session-v2-' + password)
+    .digest('hex')
+    .substring(0, 8);
+}
+
+function generateToken(password) {
+  return crypto.createHash('sha256')
+    .update('rcmd-token-v2-' + password)
+    .digest('hex')
+    .substring(0, 16);
+}
+
+// Get detailed system metadata
 function getSystemMetadata() {
   const metadata = {
     os: {
@@ -112,35 +160,22 @@ function getSystemMetadata() {
     network: {
       ipv4: [],
       ipv6: [],
-      interfaces: [],
     },
     environment: {
       isDocker: false,
       isSSH: !!process.env.SSH_TTY,
-      isScreen: !!process.env.STY,
-      isTmux: !!process.env.TMUX,
       terminal: process.env.TERM || 'unknown',
-      lang: process.env.LANG || 'unknown',
     },
     timestamp: new Date().toISOString(),
   };
 
-  // Windows-specific commands
   const isWindows = os.platform() === 'win32';
   
   try {
     if (isWindows) {
-      // Check for WSL
+      // Disk space
       try {
-        const wslCheck = execSync('wsl --status 2>nul', { encoding: 'utf8' });
-        metadata.os.isWSL = false; // Windows itself, not WSL
-      } catch {
-        // WSL not installed, that's fine
-      }
-      
-      // Get disk space on Windows
-      try {
-        const diskInfo = execSync('wmic logicaldisk where "DeviceID=\'C:\'" get Size,FreeSpace /format:csv', { encoding: 'utf8' });
+        const diskInfo = execSync('wmic logicaldisk where "DeviceID=\'C:\'" get Size,FreeSpace /format:csv 2>nul', { encoding: 'utf8' });
         const lines = diskInfo.trim().split('\n');
         if (lines.length >= 2) {
           const values = lines[1].split(',');
@@ -151,36 +186,57 @@ function getSystemMetadata() {
         }
       } catch {}
       
-      // Windows-specific tool checks
+      // Tool versions
+      try { metadata.software.npmVersion = execSync('npm --version 2>nul', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.gitVersion = execSync('git --version 2>nul', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.pythonVersion = execSync('python --version 2>nul', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.dockerVersion = execSync('docker --version 2>nul', { encoding: 'utf8' }).trim(); } catch {}
+    } else {
+      // Linux/Mac commands
       try {
-        metadata.software.npmVersion = execSync('npm --version 2>nul', { encoding: 'utf8' }).trim();
+        const wslCheck = execSync('cat /proc/version 2>/dev/null', { encoding: 'utf8' }).toLowerCase();
+        if (wslCheck.includes('microsoft') || wslCheck.includes('wsl')) {
+          metadata.os.isWSL = true;
+          try {
+            const releaseContent = fs.readFileSync('/etc/os-release', 'utf8');
+            const nameMatch = releaseContent.match(/^NAME="?(.+?)"?$/m);
+            if (nameMatch) metadata.os.wslDistro = nameMatch[1];
+          } catch {}
+        }
       } catch {}
       
       try {
-        metadata.software.gitVersion = execSync('git --version 2>nul', { encoding: 'utf8' }).trim();
+        const diskInfo = execSync('df -h / 2>/dev/null | tail -1', { encoding: 'utf8' }).trim().split(/\s+/);
+        if (diskInfo.length >= 4) {
+          metadata.hardware.totalDisk = diskInfo[1];
+          metadata.hardware.freeDisk = diskInfo[3];
+        }
       } catch {}
       
-      try {
-        metadata.software.pythonVersion = execSync('python --version 2>nul', { encoding: 'utf8' }).trim();
-      } catch {}
+      try { metadata.software.npmVersion = execSync('npm --version 2>/dev/null', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.gitVersion = execSync('git --version 2>/dev/null', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.pythonVersion = execSync('python3 --version 2>/dev/null || python --version 2>/dev/null', { encoding: 'utf8' }).trim(); } catch {}
+      try { metadata.software.dockerVersion = execSync('docker --version 2>/dev/null', { encoding: 'utf8' }).trim(); } catch {}
       
+      // Docker detection
       try {
-        metadata.software.dockerVersion = execSync('docker --version 2>nul', { encoding: 'utf8' }).trim();
+        const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
+        if (cgroup.includes('docker') || cgroup.includes('containerd')) {
+          metadata.environment.isDocker = true;
+        }
       } catch {}
     }
-  } catch (error) {
-    // Silently handle errors for optional features
-  }
+  } catch {}
 
-  // Get network interfaces
+  // Network interfaces
   try {
     const interfaces = os.networkInterfaces();
     for (const [name, netInfo] of Object.entries(interfaces)) {
       netInfo.forEach(addr => {
-        if (addr.family === 'IPv4') {
-          metadata.network.ipv4.push(`${addr.address} (${name})`);
-        } else if (addr.family === 'IPv6') {
-          metadata.network.ipv6.push(`${addr.address} (${name})`);
+        if (addr.family === 'IPv4' && !addr.internal) {
+          metadata.network.ipv4.push(addr.address);
+        } else if (addr.family === 'IPv6' && !addr.internal) {
+          metadata.network.ipv6.push(addr.address);
         }
       });
     }
@@ -188,69 +244,83 @@ function getSystemMetadata() {
 
   return metadata;
 }
+
 // Start hosting terminal
-function startHosting(password, port) {
+function startHosting(password) {
   const sessionId = generateSessionId(password);
   const token = generateToken(password);
   
-  console.log(`\n╔════════════════════════════════════════╗`);
-  console.log(`║          HOSTING TERMINAL              ║`);
-  console.log(`╚════════════════════════════════════════╝\n`);
+  console.log(`\n${colors.bgGreen}${colors.black}${colors.bright}                    HOSTING TERMINAL                    ${colors.reset}\n`);
   
-  console.log(`✓ Session ID: ${sessionId}`);
-  console.log(`✓ Password: ${password}`);
-  console.log(`\n✓ Share this command to connect:`);
-  console.log(`  rcmd connect ${sessionId} ${password}\n`);
+  log.success(`Session ready`);
+  console.log(`  ${colors.cyan}Session ID:${colors.reset}  ${colors.bright}${colors.yellow}${sessionId}${colors.reset}`);
+  console.log(`  ${colors.cyan}Password:${colors.reset}    ${colors.bright}${colors.yellow}${password}${colors.reset}`);
   
-  // Collect metadata
+  console.log(`\n${colors.bright}${colors.cyan}Share this command to connect:${colors.reset}`);
+  log.command(`rcmd connect ${sessionId} ${password}`);
+  
+  // Collect and display metadata
   const metadata = getSystemMetadata();
-  console.log(`✓ System Information:`);
-  console.log(`  • OS: ${metadata.os.platform} ${metadata.os.release}`);
-  console.log(`  • Hostname: ${metadata.os.hostname}`);
-  console.log(`  • User: ${metadata.user.username}`);
-  console.log(`  • CPUs: ${metadata.hardware.cpus}`);
-  console.log(`  • Memory: ${(metadata.hardware.totalMemory / 1024 / 1024 / 1024).toFixed(2)} GB`);
+  
+  console.log(`\n${colors.bright}${colors.magenta}System Information:${colors.reset}`);
+  console.log(`  ${colors.cyan}•${colors.reset} OS:       ${colors.white}${metadata.os.platform} ${metadata.os.release}${colors.reset}`);
+  console.log(`  ${colors.cyan}•${colors.reset} Host:     ${colors.white}${metadata.os.hostname}${colors.reset}`);
+  console.log(`  ${colors.cyan}•${colors.reset} User:     ${colors.white}${metadata.user.username}${colors.reset}`);
+  console.log(`  ${colors.cyan}•${colors.reset} CPUs:     ${colors.white}${metadata.hardware.cpus}${colors.reset}`);
+  console.log(`  ${colors.cyan}•${colors.reset} Memory:   ${colors.white}${(metadata.hardware.totalMemory / 1024 / 1024 / 1024).toFixed(2)} GB${colors.reset}`);
+  
   if (metadata.os.isWSL) {
-    console.log(`  • WSL ${metadata.os.wslVersion}: ${metadata.os.wslDistro}`);
+    console.log(`  ${colors.cyan}•${colors.reset} WSL:      ${colors.yellow}v${metadata.os.wslVersion} - ${metadata.os.wslDistro}${colors.reset}`);
   }
-  console.log(`\n✓ Connecting to relay server...`);
+  
+  console.log(`\n${colors.dim}Connecting to relay server...${colors.reset}`);
   
   // Connect to relay via WebSocket
-  const ws = new WebSocket(`${RELAY_SERVER.replace(/^http/, 'ws')}?session=${sessionId}&role=host&token=${token}`);
+  const wsUrl = `${RELAY_SERVER.replace(/^http/, 'ws')}?session=${sessionId}&role=host&token=${token}`;
+  const ws = new WebSocket(wsUrl);
   
   let currentClientPeerId = null;
+  let pingInterval;
   
   ws.on('open', () => {
-    console.log(`✓ Connected to relay server`);
-    console.log(`✓ Waiting for clients...\n`);
+    log.success('Connected to relay server');
+    log.success('Waiting for clients to connect...\n');
     
-    // Send metadata when requested
+    // Keep connection alive
+    pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
+    
     ws.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString());
         
         if (message.type === 'request_metadata') {
+          log.info('Client connected, sending system info...');
           ws.send(JSON.stringify({
             type: 'metadata_response',
             data: metadata
           }));
+          log.success('Client connected successfully!\n');
         }
         else if (message.type === 'client_command') {
-          // Execute command from client
           currentClientPeerId = message.fromPeerId;
           const command = message.command;
           
-          console.log(`\n> ${command}`);
+          console.log(`${colors.bright}${colors.cyan}>${colors.reset} ${colors.white}${command}${colors.reset}`);
           
           try {
             const shell = os.platform() === 'win32' ? 'cmd.exe' : '/bin/bash';
             const shellArg = os.platform() === 'win32' ? '/c' : '-c';
             
             const output = execSync(command, { 
-              shell: `${shell} ${shellArg} "${command}"`,
+              shell: true,
               encoding: 'utf8', 
               maxBuffer: 10 * 1024 * 1024,
-              timeout: 30000
+              timeout: 30000,
+              windowsHide: true
             });
             
             ws.send(JSON.stringify({
@@ -262,31 +332,38 @@ function startHosting(password, port) {
           } catch (err) {
             ws.send(JSON.stringify({
               type: 'command_result',
-              output: err.message,
+              output: err.stderr || err.message,
               success: false,
               targetPeerId: currentClientPeerId
             }));
           }
         }
       } catch (error) {
-        console.error('Error processing message:', error.message);
+        log.error(`Error processing message: ${error.message}`);
       }
     });
   });
   
   ws.on('error', (error) => {
-    console.error(`✗ Connection error: ${error.message}`);
+    clearInterval(pingInterval);
+    log.error(`Connection failed: ${error.message}`);
+    log.info(`Relay server: ${RELAY_SERVER}`);
+    process.exit(1);
   });
   
-  ws.on('close', () => {
-    console.log(`\n✓ Disconnected from relay server`);
+  ws.on('close', (code, reason) => {
+    clearInterval(pingInterval);
+    console.log(`\n${colors.yellow}⚠${colors.reset} ${colors.dim}Disconnected from relay server${colors.reset}`);
     process.exit(0);
   });
   
   // Handle graceful shutdown
   process.on('SIGINT', () => {
-    console.log(`\n✓ Stopping host...`);
-    ws.close();
+    console.log(`\n${colors.yellow}⚠${colors.reset} Stopping host...`);
+    clearInterval(pingInterval);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'Host shutting down');
+    }
     process.exit(0);
   });
 }
@@ -295,13 +372,12 @@ function startHosting(password, port) {
 function connectToHost(sessionId, password) {
   const token = generateToken(password);
   
-  console.log(`\n╔════════════════════════════════════════╗`);
-  console.log(`║         CONNECTING TO HOST             ║`);
-  console.log(`╚════════════════════════════════════════╝\n`);
+  console.log(`\n${colors.bgBlue}${colors.black}${colors.bright}                  CONNECTING TO HOST                  ${colors.reset}\n`);
   
-  console.log(`✓ Connecting to session: ${sessionId}`);
+  log.info(`Connecting to session: ${colors.bright}${sessionId}${colors.reset}`);
   
-  const ws = new WebSocket(`${RELAY_SERVER.replace(/^http/, 'ws')}?session=${sessionId}&role=client&token=${token}`);
+  const wsUrl = `${RELAY_SERVER.replace(/^http/, 'ws')}?session=${sessionId}&role=client&token=${token}`;
+  const ws = new WebSocket(wsUrl);
   
   const rl = readline.createInterface({
     input: process.stdin,
@@ -309,10 +385,18 @@ function connectToHost(sessionId, password) {
   });
   
   let connected = false;
+  let pingInterval;
   
   ws.on('open', () => {
-    console.log(`✓ Connected to relay server`);
-    console.log(`✓ Waiting for host...\n`);
+    log.success('Connected to relay server');
+    console.log(`${colors.dim}Waiting for host to accept connection...${colors.reset}\n`);
+    
+    // Keep connection alive
+    pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
     
     ws.on('message', (data) => {
       try {
@@ -320,49 +404,56 @@ function connectToHost(sessionId, password) {
         
         if (message.type === 'metadata') {
           connected = true;
-          console.log(`✓ Host connected!`);
-          console.log(`\n╔════════════════════════════════════════╗`);
-          console.log(`║         REMOTE SYSTEM INFO             ║`);
-          console.log(`╚════════════════════════════════════════╝`);
+          clearInterval(pingInterval);
           
           const m = message.data;
-          console.log(`\n📋 System:`);
-          console.log(`  • OS: ${m.os.platform} ${m.os.release} (${m.os.arch})`);
-          console.log(`  • Hostname: ${m.os.hostname}`);
-          console.log(`  • Uptime: ${Math.floor(m.os.uptime / 3600)}h ${Math.floor((m.os.uptime % 3600) / 60)}m`);
+          
+          console.log(`\n${colors.bgGreen}${colors.black}${colors.bright}                  REMOTE SYSTEM INFO                   ${colors.reset}\n`);
+          
+          log.section('📋 System');
+          console.log(`  ${colors.cyan}•${colors.reset} OS:        ${colors.white}${m.os.platform} ${m.os.release}${colors.reset} ${colors.dim}(${m.os.arch})${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Hostname:  ${colors.white}${m.os.hostname}${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Uptime:    ${colors.white}${Math.floor(m.os.uptime / 3600)}h ${Math.floor((m.os.uptime % 3600) / 60)}m${colors.reset}`);
           
           if (m.os.isWSL) {
-            console.log(`  • WSL: v${m.os.wslVersion} - ${m.os.wslDistro}`);
+            console.log(`  ${colors.cyan}•${colors.reset} WSL:       ${colors.yellow}v${m.os.wslVersion} - ${m.os.wslDistro}${colors.reset}`);
           }
           
-          console.log(`\n👤 User:`);
-          console.log(`  • Username: ${m.user.username}`);
-          console.log(`  • Shell: ${m.user.shell}`);
-          console.log(`  • Home: ${m.user.homedir}`);
+          log.section('👤 User');
+          console.log(`  ${colors.cyan}•${colors.reset} Username:  ${colors.white}${m.user.username}${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Shell:     ${colors.white}${m.user.shell}${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Home:      ${colors.dim}${m.user.homedir}${colors.reset}`);
           
-          console.log(`\n💻 Hardware:`);
-          console.log(`  • CPU: ${m.hardware.cpuModel}`);
-          console.log(`  • Cores: ${m.hardware.cpus}`);
-          console.log(`  • Memory: ${(m.hardware.totalMemory / 1024 / 1024 / 1024).toFixed(2)} GB`);
+          log.section('💻 Hardware');
+          console.log(`  ${colors.cyan}•${colors.reset} CPU:       ${colors.white}${m.hardware.cpuModel}${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Cores:     ${colors.white}${m.hardware.cpus}${colors.reset}`);
+          console.log(`  ${colors.cyan}•${colors.reset} Memory:    ${colors.white}${(m.hardware.totalMemory / 1024 / 1024 / 1024).toFixed(2)} GB${colors.reset}`);
           if (m.hardware.totalDisk) {
-            console.log(`  • Disk: ${m.hardware.totalDisk} total, ${m.hardware.freeDisk} free`);
+            console.log(`  ${colors.cyan}•${colors.reset} Disk:      ${colors.white}${m.hardware.totalDisk} total${colors.reset} ${colors.dim}(${m.hardware.freeDisk} free)${colors.reset}`);
           }
           
-          console.log(`\n🛠️ Tools:`);
-          console.log(`  • Node.js: ${m.software.nodeVersion}`);
-          if (m.software.gitVersion) console.log(`  • Git: ${m.software.gitVersion}`);
-          if (m.software.pythonVersion) console.log(`  • Python: ${m.software.pythonVersion}`);
-          if (m.software.dockerVersion) console.log(`  • Docker: ${m.software.dockerVersion}`);
+          log.section('🛠️  Software');
+          console.log(`  ${colors.cyan}•${colors.reset} Node.js:   ${colors.green}${m.software.nodeVersion}${colors.reset}`);
+          if (m.software.npmVersion) console.log(`  ${colors.cyan}•${colors.reset} npm:       ${colors.green}${m.software.npmVersion}${colors.reset}`);
+          if (m.software.gitVersion) console.log(`  ${colors.cyan}•${colors.reset} Git:       ${colors.green}${m.software.gitVersion}${colors.reset}`);
+          if (m.software.pythonVersion) console.log(`  ${colors.cyan}•${colors.reset} Python:    ${colors.green}${m.software.pythonVersion}${colors.reset}`);
+          if (m.software.dockerVersion) console.log(`  ${colors.cyan}•${colors.reset} Docker:    ${colors.green}${m.software.dockerVersion}${colors.reset}`);
           
-          if (m.environment.isDocker) console.log(`  • Running in Docker container`);
-          if (m.environment.isSSH) console.log(`  • Via SSH connection`);
+          if (m.environment.isDocker || m.environment.isSSH) {
+            log.section('🏗️  Environment');
+            if (m.environment.isDocker) console.log(`  ${colors.cyan}•${colors.reset} Running in Docker container`);
+            if (m.environment.isSSH) console.log(`  ${colors.cyan}•${colors.reset} Via SSH connection`);
+          }
           
-          console.log(`\n🌐 Network:`);
-          console.log(`  • IPv4: ${m.network.ipv4.join(', ') || 'None'}`);
+          if (m.network.ipv4.length > 0) {
+            log.section('🌐 Network');
+            console.log(`  ${colors.cyan}•${colors.reset} IPv4: ${colors.dim}${m.network.ipv4.join(', ')}${colors.reset}`);
+          }
           
-          console.log(`\n${'═'.repeat(44)}`);
-          console.log(`Type commands to execute on remote host`);
-          console.log(`Type 'exit' to disconnect\n`);
+          console.log(`\n${colors.bgCyan}${colors.black}${colors.bright}                                                    ${colors.reset}`);
+          console.log(`${colors.bright}${colors.white}  Type commands to execute on remote host  ${colors.reset}`);
+          console.log(`${colors.bright}${colors.white}  Type 'exit' to disconnect                ${colors.reset}`);
+          console.log(`${colors.bgCyan}${colors.black}${colors.bright}                                                    ${colors.reset}\n`);
           
           promptCommand();
         }
@@ -373,30 +464,37 @@ function connectToHost(sessionId, password) {
           promptCommand();
         }
         else if (message.type === 'host_disconnected') {
-          console.log(`\n✗ Host disconnected`);
+          console.log(`\n${colors.yellow}⚠${colors.reset} ${colors.red}Host has disconnected${colors.reset}`);
           rl.close();
+          ws.close();
           process.exit(0);
         }
       } catch (error) {
-        console.error('Error processing message:', error.message);
+        log.error(`Error processing message: ${error.message}`);
       }
     });
   });
   
   function promptCommand() {
-    rl.question('rcmd> ', (input) => {
+    rl.question(`${colors.bright}${colors.green}rcmd${colors.reset}${colors.dim}>${colors.reset} `, (input) => {
       if (input.toLowerCase() === 'exit') {
-        console.log(`✓ Disconnected`);
+        console.log(`\n${colors.green}✓${colors.reset} Disconnected`);
         rl.close();
-        ws.close();
+        clearInterval(pingInterval);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1000, 'Client disconnected');
+        }
         process.exit(0);
       }
       
-      if (input.trim() && ws.readyState === WebSocket.OPEN) {
+      if (input.trim() && ws.readyState === WebSocket.OPEN && connected) {
         ws.send(JSON.stringify({
           type: 'client_command',
           command: input
         }));
+      } else if (!connected) {
+        log.warn('Not yet connected to host');
+        promptCommand();
       } else {
         promptCommand();
       }
@@ -404,33 +502,22 @@ function connectToHost(sessionId, password) {
   }
   
   ws.on('error', (error) => {
-    console.error(`✗ Connection error: ${error.message}`);
+    clearInterval(pingInterval);
+    log.error(`Connection failed: ${error.message}`);
+    log.info('Make sure the host is running and the relay server is accessible');
     process.exit(1);
   });
   
-  ws.on('close', () => {
+  ws.on('close', (code) => {
+    clearInterval(pingInterval);
     if (!connected) {
-      console.log(`✗ Could not connect to host. Check session ID and password.`);
+      console.log(`\n${colors.red}✗${colors.reset} Could not connect to host`);
+      console.log(`${colors.dim}  Check:${colors.reset}`);
+      console.log(`${colors.dim}  • Session ID is correct${colors.reset}`);
+      console.log(`${colors.dim}  • Password is correct${colors.reset}`);
+      console.log(`${colors.dim}  • Host is still running${colors.reset}`);
+      console.log(`${colors.dim}  • Relay server is accessible${colors.reset}\n`);
     }
     process.exit(0);
   });
-}
-
-// Utility functions
-function generateSessionId(password) {
-  return crypto.createHash('sha256')
-    .update(password + 'session')
-    .digest('hex')
-    .substring(0, 8);
-}
-
-function generateToken(password) {
-  return crypto.createHash('sha256')
-    .update(password + Date.now().toString())
-    .digest('hex')
-    .substring(0, 16);
-}
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
 }
