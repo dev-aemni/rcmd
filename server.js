@@ -17,8 +17,17 @@ const sessions = new Map(); // sessionId -> { host, clients }
 const peerConnections = new Map(); // ws -> { sessionId, role, peerId }
 
 app.use(express.json());
+// Add this health check endpoint (near the other routes)
+app.get('/hc', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    service: 'RCMD Relay Server',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
 
-// Health check endpoint
+// Your existing root endpoint
 app.get('/', (req, res) => {
   res.json({
     status: 'active',
