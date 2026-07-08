@@ -226,7 +226,7 @@ wss.on('connection', (ws, req) => {
 });
 
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n✓ RCMD Relay Server running on port ${PORT}`);
   console.log(`✓ WebSocket server ready for connections\n`);
 });
