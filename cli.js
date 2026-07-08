@@ -74,10 +74,9 @@ Relay Server: ${RELAY_SERVER}
   process.exit(0);
 }
 
-// Get detailed system metadata
+// Get detailed system metadata (Windows compatible)
 function getSystemMetadata() {
   const metadata = {
-    // OS Information
     os: {
       platform: os.platform(),
       type: os.type(),
@@ -86,21 +85,15 @@ function getSystemMetadata() {
       version: os.version(),
       hostname: os.hostname(),
       uptime: os.uptime(),
-      
-      // WSL Detection
       isWSL: false,
       wslVersion: null,
       wslDistro: null,
     },
-    
-    // User Information
     user: {
       username: os.userInfo().username,
       homedir: os.userInfo().homedir,
       shell: process.env.SHELL || process.env.COMSPEC || 'unknown',
     },
-    
-    // Hardware
     hardware: {
       cpus: os.cpus().length,
       cpuModel: os.cpus()[0]?.model || 'Unknown',
@@ -109,8 +102,6 @@ function getSystemMetadata() {
       totalDisk: null,
       freeDisk: null,
     },
-    
-    // Software
     software: {
       nodeVersion: process.version,
       npmVersion: null,
@@ -118,15 +109,11 @@ function getSystemMetadata() {
       pythonVersion: null,
       dockerVersion: null,
     },
-    
-    // Network
     network: {
       ipv4: [],
       ipv6: [],
       interfaces: [],
     },
-    
-    // Environment
     environment: {
       isDocker: false,
       isSSH: !!process.env.SSH_TTY,
@@ -135,84 +122,60 @@ function getSystemMetadata() {
       terminal: process.env.TERM || 'unknown',
       lang: process.env.LANG || 'unknown',
     },
-    
     timestamp: new Date().toISOString(),
   };
 
-  // Detect WSL
+  // Windows-specific commands
+  const isWindows = os.platform() === 'win32';
+  
   try {
-    if (os.platform() === 'linux') {
-      const releaseContent = fs.readFileSync('/proc/version', 'utf8').toLowerCase();
-      if (releaseContent.includes('microsoft') || releaseContent.includes('wsl')) {
-        metadata.os.isWSL = true;
-        
-        // Get WSL version
-        try {
-          const wslCheck = execSync('wsl.exe --version 2>/dev/null || echo "WSL1"', { encoding: 'utf8' });
-          metadata.os.wslVersion = wslCheck.includes('WSL2') ? 2 : 1;
-        } catch {
-          metadata.os.wslVersion = 1;
-        }
-        
-        // Get WSL distro
-        try {
-          const distro = execSync('cat /etc/os-release | grep "^NAME=" | cut -d= -f2', { encoding: 'utf8' });
-          metadata.os.wslDistro = distro.replace(/"/g, '').trim();
-        } catch {
-          metadata.os.wslDistro = 'Unknown';
-        }
+    if (isWindows) {
+      // Check for WSL
+      try {
+        const wslCheck = execSync('wsl --status 2>nul', { encoding: 'utf8' });
+        metadata.os.isWSL = false; // Windows itself, not WSL
+      } catch {
+        // WSL not installed, that's fine
       }
+      
+      // Get disk space on Windows
+      try {
+        const diskInfo = execSync('wmic logicaldisk where "DeviceID=\'C:\'" get Size,FreeSpace /format:csv', { encoding: 'utf8' });
+        const lines = diskInfo.trim().split('\n');
+        if (lines.length >= 2) {
+          const values = lines[1].split(',');
+          if (values.length >= 3) {
+            metadata.hardware.freeDisk = (parseInt(values[1]) / (1024*1024*1024)).toFixed(2) + ' GB';
+            metadata.hardware.totalDisk = (parseInt(values[2]) / (1024*1024*1024)).toFixed(2) + ' GB';
+          }
+        }
+      } catch {}
+      
+      // Windows-specific tool checks
+      try {
+        metadata.software.npmVersion = execSync('npm --version 2>nul', { encoding: 'utf8' }).trim();
+      } catch {}
+      
+      try {
+        metadata.software.gitVersion = execSync('git --version 2>nul', { encoding: 'utf8' }).trim();
+      } catch {}
+      
+      try {
+        metadata.software.pythonVersion = execSync('python --version 2>nul', { encoding: 'utf8' }).trim();
+      } catch {}
+      
+      try {
+        metadata.software.dockerVersion = execSync('docker --version 2>nul', { encoding: 'utf8' }).trim();
+      } catch {}
     }
-  } catch {}
-
-  // Get tool versions
-  try {
-    metadata.software.npmVersion = execSync('npm --version 2>/dev/null', { encoding: 'utf8' }).trim();
-  } catch {}
-  
-  try {
-    metadata.software.gitVersion = execSync('git --version 2>/dev/null', { encoding: 'utf8' }).trim();
-  } catch {}
-  
-  try {
-    metadata.software.pythonVersion = execSync('python3 --version 2>/dev/null || python --version 2>/dev/null', { encoding: 'utf8' }).trim();
-  } catch {}
-  
-  try {
-    metadata.software.dockerVersion = execSync('docker --version 2>/dev/null', { encoding: 'utf8' }).trim();
-  } catch {}
-
-  // Get disk space
-  try {
-    const diskInfo = execSync('df -h / 2>/dev/null | tail -1', { encoding: 'utf8' }).trim().split(/\s+/);
-    if (diskInfo.length >= 4) {
-      metadata.hardware.totalDisk = diskInfo[1];
-      metadata.hardware.freeDisk = diskInfo[3];
-    }
-  } catch {}
-
-  // Detect Docker
-  try {
-    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
-    if (cgroup.includes('docker') || cgroup.includes('containerd')) {
-      metadata.environment.isDocker = true;
-    }
-  } catch {}
+  } catch (error) {
+    // Silently handle errors for optional features
+  }
 
   // Get network interfaces
   try {
     const interfaces = os.networkInterfaces();
     for (const [name, netInfo] of Object.entries(interfaces)) {
-      const interfaceData = {
-        name,
-        addresses: netInfo.map(addr => ({
-          address: addr.address,
-          family: addr.family,
-          internal: addr.internal
-        }))
-      };
-      metadata.network.interfaces.push(interfaceData);
-      
       netInfo.forEach(addr => {
         if (addr.family === 'IPv4') {
           metadata.network.ipv4.push(`${addr.address} (${name})`);
@@ -225,7 +188,6 @@ function getSystemMetadata() {
 
   return metadata;
 }
-
 // Start hosting terminal
 function startHosting(password, port) {
   const sessionId = generateSessionId(password);
